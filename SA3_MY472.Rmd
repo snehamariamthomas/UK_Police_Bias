@@ -1,0 +1,1207 @@
+---
+title: "Summative Assessment 3"
+author: "202359074"
+date: "04 January 2024"
+output: html_document
+knit: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE}
+library(readxl)
+library(ggplot2)
+library(maps)
+library(tidyverse)
+library(dplyr)
+library(leaflet)
+library(viridis)
+library(htmltools)
+library(sf)
+library(rnaturalearth)
+library(tidyr)
+library(tibble)
+library(data.table)
+library(plotly)
+library(purrr)
+library(RSQLite)
+library(DBI)
+library(knitr)
+library(kableExtra)
+```
+##### The research report is available in github repository, accessible for review [here](https://github.com/snehamariamthomas/UK_Police_Bias.git)
+&nbsp;
+&nbsp;
+
+## __INTRODUCTION__
+&nbsp; 
+
+##### The diverse ethnic landscape of the United Kingdom prompts a critical examination of interactions with local law enforcement. This study seeks to uncover any potential disparities in policing practices within this cosmopolitan society.
+&nbsp;
+
+##### This research endeavours to reveal biases,if any, within varied ethnic encounters with law enforcement by:    
+##### - Correlating police deployment with non-white populations      
+##### - Analysing ethnic diversity in police force and its impact on stops    
+##### - Investigating biases in associating searched objects with suspect ethnicity   
+##### - Assessing disparities in post-stop-and-search treatments       
+&nbsp;
+&nbsp;
+
+## __DATA__
+&nbsp;
+
+### __**About Datset**__:  
+
+##### The study is centered on the 2021 stop-and-search police dataset, investigating interactions among various ethnicities during that year. Additionally, it leverages the concurrent release of the 2021 census data to enhance demographic insights without adjusting for population changes,as the study is confined to this single year's datasets.Other datasets used in the study are referenced where they contribute to the analysis.
+&nbsp;
+
+### __**Data Processing**__:  
+
+##### 1. To align police stop-and-search data, gathered by territorial force areas, with census data collected at the local authorities' level, aggregation was needed to match local authorities with their corresponding territorial force areas.      
+
+##### 2. The Census data, with 19 sub-ethnicities, was grouped into broader categories: Asian, Black, Mixed, White, and Other. While maps display sub-ethnicities in local authorities and police force areas, the primary analysis concentrates on major ethnic groups.    
+
+##### 3. Similarly,police records categorised officers' ethnicities into major ethnicities, whereas suspects' sub-ethnicities were recorded. The latter were aggregated into major ethnicities for facilitating comparison and analysis.  
+
+##### 4. Though the study glimpses into ethnic representation at police jurisdiction levels, it transitions from a focus on sub-areas to a national-level analysis. It aimed to overcome limitations posed by varied, small-scale sub-ethnicities across regions. Limited statistical significance and variation among these subsets impeded a detailed analysis, while diverse population sizes within regions added complexity to understanding these sub-ethnicities comprehensively.    
+
+##### 5. The British Transport Police (focus on railway policing) was omitted from analysis to maintain a focus on police jurisdictions under local authorities' purview.   
+
+##### 6. The stop-and-search dataset includes individuals who self-reported their ethnicity as "Unknown." These instances were excluded from the analysis to align with population-relative datasets, as census records lack estimates for such categories.  
+
+##### 7. I utilised RSQLite to organise and store the extensive dataset (police stop-search data). Each analysis on this dataset was conducted using targeted SQL queries.   
+
+##### 8. The confidence in local police dataset is derived from survey data, not reflective of the entire populace.
+&nbsp;
+&nbsp;
+
+## __ANALYSIS__
+&nbsp;
+
+### __**1. Background**__
+&nbsp;
+
+##### 1.1. To gauge the cosmopolitanism of the UK population, these maps illustrate the global origins of residents in the country and their distribution relative to the total population across Northern Ireland, Wales, Scotland, and England.
+&nbsp;
+
+```{r message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+  
+#MAPPING TOP 60 NATIONALITIES IN UK:
+
+nationality_data <- read_excel("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/populationbycountryofbirthandnationalityjul20tojun21.xls", sheet = "2.3" )
+
+#Data Processing
+nationality_data <- nationality_data[-c(1:4), ]
+#Making first row as header
+colnames(nationality_data) <- as.character(unlist(nationality_data[1, ]))
+nationality_data <- nationality_data[-1, ]
+names(nationality_data)[1] <- "Population Rank"
+names(nationality_data)[2] <- "Country"
+names(nationality_data)[3] <- "Total Persons"
+names(nationality_data)[5] <- "Total Males"
+names(nationality_data)[7] <- "Total Females"
+
+nationality_data <- nationality_data %>%
+  mutate_at(vars(-2), as.numeric) #For percentages
+
+
+world_map <- ne_countries(scale = "medium", returnclass = "sf")
+
+merged_data <- merge(world_map, nationality_data, by.x = "admin", by.y = "Country", all.x = TRUE)
+
+# Removing Antartica
+filtered_data <- merged_data %>%
+  filter(admin != "Antarctica")
+
+global_origin_map <- ggplot(data = filtered_data, aes(fill = `Population Rank`)) +
+  geom_sf(size = 0.1, color = "black") +
+  scale_fill_viridis_c(
+    option = "plasma",
+    direction = 1,
+    na.value = "white",
+    trans = "reverse",
+    name = expression(bold("Country Ranking by Total Immigrants (1 = Highest)")),  # Legend title
+    breaks = c(1, 10, 20, 30, 40, 50, 60),  # Specific breaks
+  ) +
+  labs(
+    title = expression(bold("Top 60 Nationalities: Global Origins of Residents in the United Kingdom (2020-2021)")),
+    caption = "Source:Annual Population Survey(2021), Office for National Statistics UK"
+  ) +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    plot.caption = element_text(size = 6),
+    panel.background = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",  
+    legend.key.height = unit(0.3, "cm"),
+    legend.key.width = unit(2, "cm"),
+    legend.title = element_text(size = 8)  # Adjust legend title size
+  ) +
+  guides(fill = guide_colorbar(title.position = "top", title.vjust = 2, label.vjust = 0.5))
+global_origin_map
+
+```
+
+
+```{r message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+  
+#REGION WISE POPULATION:
+
+uk_nationality_data <- read_excel("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/populationbycountryofbirthandnationalityjul20tojun21.xls", sheet = "2.1" )
+
+#Data Processing
+uk_nationality_data <- uk_nationality_data[-c(1:3), ]
+colnames(uk_nationality_data) <- as.character(unlist(uk_nationality_data[1, ]))
+uk_nationality_data <- uk_nationality_data[-1, ]
+names(uk_nationality_data)[4]<- "Total_Population"
+names(uk_nationality_data)[6] <- "UK_Nationals"
+names(uk_nationality_data)[10] <-"European_Union_Nationals"
+names(uk_nationality_data)[26] <- "ME_CAsia_Nationals"
+names(uk_nationality_data)[28] <- "East_Asian_Nationals"
+names(uk_nationality_data)[30] <- "South_Asian_Nationals"
+names(uk_nationality_data)[32] <- "SEast_Asian_Nationals"
+names(uk_nationality_data)[36] <- "SubSahara_African_Nationals"
+names(uk_nationality_data)[38] <- "North_African_Nationals"
+names(uk_nationality_data)[40] <- "North_American_Nationals"
+names(uk_nationality_data)[42] <- "CS_American_Nationals"
+names(uk_nationality_data)[44] <- "Oceania_Nationals"
+
+#Converting to numeric for percentage calulations
+columns_to_convert <- setdiff(seq_along(uk_nationality_data), c(1, 2, 3, 5))  
+uk_nationality_data[columns_to_convert] <- lapply(uk_nationality_data[columns_to_convert], function(x) {
+  numeric_values <- suppressWarnings(as.numeric(as.character(x)))
+  ifelse(is.na(numeric_values), NA, numeric_values)
+})
+
+uk_regions<- uk_nationality_data %>%
+  filter(Geography == 'Country') %>% 
+  select("Area Code", Name, Geography,Total_Population, UK_Nationals, European_Union_Nationals,
+         ME_CAsia_Nationals, East_Asian_Nationals, South_Asian_Nationals,
+         SEast_Asian_Nationals, SubSahara_African_Nationals,
+         North_African_Nationals, North_American_Nationals,
+         CS_American_Nationals, Oceania_Nationals)
+uk_regions<-uk_regions[-1,] #Removing Totals
+
+uk_regions$Name <- tolower(uk_regions$Name)
+uk_regions$Name <- sapply(strsplit(uk_regions$Name, " "), function(words) {
+  paste(toupper(substring(words, 1, 1)), substring(words, 2), sep = "", collapse = " ")
+})
+
+# Calculating Percentages
+columns_to_divide <- colnames(uk_regions)[5:length(colnames(uk_regions))]
+uk_regions <- uk_regions %>%
+  mutate(across(all_of(columns_to_divide), ~ ./ (Total_Population)*100))
+
+#Mapping
+#To suppress the message generated from sf package in R markdown
+read_geojson <- function(file_path) {
+  result <- capture.output({
+    data <- sf::st_read(file_path)
+  })
+  
+  # Filter out the undesired messages
+  filtered_result <- result[!grepl("Reading layer|Simple feature collection", result)]
+  
+  invisible(data)
+}
+uk_boundary_geojson <- read_geojson("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/united_kingdom_administrative_boundaries_province_polygon.geojson")
+
+
+#Name Matching 
+name_mapping <- tribble(
+  ~name_geojson, ~Name_regions,
+  "Alba / Scotland", "Scotland",
+  "Cymru / Wales", "Wales",
+  "Northern Ireland / Tuaisceart Éireann", "Northern Ireland",
+  "England", "England"
+)
+combined_data <- uk_boundary_geojson %>%
+  left_join(name_mapping, by = c("name" = "name_geojson")) %>%
+  left_join(uk_regions, by = c("Name_regions" = "Name"))
+#Removing duplicate columns
+combined_data <- combined_data[!duplicated(combined_data$Name_regions), ]
+
+uk_pop_map <- leaflet() %>%
+  addTiles() %>%
+  addPolygons(
+    data = combined_data,
+    fillColor = "yellow",
+    fillOpacity = 0.1,
+    label = lapply(1:nrow(combined_data), function(i) {
+      html <- paste("<b>Name:</b>", combined_data$name[i],
+                    "<br><b>Total Population:</b>", round(combined_data$Total_Population[i], 2),
+                    "<br><b>UK Nationals (%):</b>", round(combined_data$UK_Nationals[i], 2),
+                    "<br><b>European Union Nationals (%):</b>", round(combined_data$European_Union_Nationals[i], 2),
+                    "<br><b>MiddleEast-Central Asia Nationals (%):</b>", round(combined_data$ME_CAsia_Nationals[i], 2),
+                    "<br><b>East Asia Nationals (%):</b>", round(combined_data$East_Asian_Nationals[i], 2),
+                    "<br><b>South Asia Nationals (%):</b>", round(combined_data$South_Asian_Nationals[i], 2),
+                    "<br><b>South East Asia Nationals (%):</b>", round(combined_data$SEast_Asian_Nationals[i], 2),
+                    "<br><b>Sub Saharan Africa Nationals (%):</b>", round(combined_data$SubSahara_African_Nationals[i], 2),
+                    "<br><b>North Africa Nationals (%):</b>", round(combined_data$North_African_Nationals[i], 2),
+                    "<br><b>North America Nationals (%):</b>", round(combined_data$North_American_Nationals[i], 2),
+                    "<br><b>Central-South America Nationals (%):</b>", round(combined_data$CS_American_Nationals[i], 2),
+                    "<br><b>Oceania Nationals (%):</b>", round(combined_data$Oceania_Nationals[i], 2))
+      HTML(html)
+    }),
+    group = ~Name_regions, 
+    layerId = ~Name_regions,
+    highlightOptions = highlightOptions(color = "black", weight = 1,
+                                        bringToFront = TRUE) 
+  ) %>% 
+  addLayersControl(
+    overlayGroups = unique(combined_data$Name_regions),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  addControl(
+    html = '<div style="font-weight: bold; font-size: 14px;">Population of the United Kingdom by Country of Birth(2021-2022)</div>',
+    position = "topleft") %>%
+  addControl(
+    html ='<div style="font-size: 8px">Source:Annual Population Survey(2021), Office for National Statistics UK </div>',
+    position = "bottomleft"
+  )
+uk_pop_map  
+
+
+```
+&nbsp;
+&nbsp;
+
+##### 1.2. The map below captures both major and sub-ethnicities within each local authority's population:
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=4}
+  
+#LOCAL AUTHORITIES: Ethnic Population
+eth_datas <- read_csv("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/population-by-ethnicity-and-local-authority-2021 (2).csv")
+eth_data <- eth_datas[,c(4,6,8,9)]
+eth_data$Ethnic_Percent <- round((eth_data$`Ethnic Population` / eth_data$`Local Authority Population`) * 100, 2)
+# Filter out rows for whole of England and Wales
+eth_data <- eth_data[!grepl("^All", eth_data$Geography), ]
+eth_data <- eth_data[!grepl("^All", eth_data$Ethnicity), ]
+
+uk_local_shapefile <- read_geojson("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/LAD_May_2020_Boundaries_UK_BFE_2022_4839426458879395509.geojson")
+map_local_data <- merge(uk_local_shapefile, eth_data, by.x = "lad20nm", by.y = "Geography")
+# Converting to sf object
+loc_pop_sf <- st_as_sf(map_local_data)
+loc_pop_sf <- st_transform(loc_pop_sf, 4326)
+# Convert to data.table for faster processing
+setDT(loc_pop_sf)
+loc_auth_pop <- loc_pop_sf[, .(Counts = paste(Ethnicity, "-", Ethnic_Percent,"%", collapse = "<br>")), by = .(lad20nm, long, lat)]
+loc_auth_pop_map <- leaflet(data = loc_auth_pop) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(lng = mean(loc_auth_pop$long, na.rm = TRUE), 
+          lat = mean(loc_auth_pop$lat, na.rm = TRUE), 
+          zoom = 5) %>%
+  addCircleMarkers(
+    lng = ~long,
+    lat = ~lat,
+    color = "red",
+    radius = 0.2,
+    stroke = FALSE,
+    fillOpacity = 0.7,
+    popup = ~paste("<b>Local Authority:</b>", lad20nm, "<br>",
+                   "<b>Percentage in Local Population:</b><br>", Counts)
+  )%>%
+  addControl(
+    html = "<h3 style='font-weight: bold; text-align: center; font-size: 14px; background-color: transparent;''>Ethnicity Distribution Across Local Authorities in England and Wales </h3>",
+    position = "topleft"
+  )%>%
+  addControl(
+    html ='<div style="font-size: 8px">Source:Census(2021), Office for National Statistics UK</div>',
+    position = "bottomleft"
+  )
+loc_auth_pop_map  
+
+```
+&nbsp;
+&nbsp;
+
+##### 1.3. The map exhibits police force area boundaries in England and Wales
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=4}
+  
+#Police Mapping
+uk_police_geojson <- read_geojson("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/Police_Force_Areas_December_2022_EW_BUC_-6731240188049729726.geojson")
+ggplot() +
+  geom_sf(data = uk_police_geojson, fill = "transparent", color = "blue") +
+  geom_sf_label(data = uk_police_geojson, aes(label = PFA22NM), size = 1.75,) +
+  theme_void() +
+  labs(title = "Police Force Areas: England and Wales")
+
+#Police Force Area- Their Local Authorities Jurisdiction
+police_local_juris <- read_csv("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/Local_Authority_District_to_Community_Safety_Partnerships_to_Police_Force_Areas_(December_2018)_Lookup_in_England_and_Wales.csv")
+names(police_local_juris)[2] <- "Local_Authority"
+names(police_local_juris)[6] <- "Police_Force"
+police_locals_juris<- police_local_juris[, c(2, 6)]
+police_locals_juris_areas <- police_locals_juris %>%
+  group_by(Police_Force) %>%
+  summarize(Areas = paste(Local_Authority, collapse = ","))
+police_local_juris_table <- data.frame(Police_Force = police_locals_juris_areas$Police_Force, Areas = police_locals_juris_areas$Areas)
+
+
+
+```
+&nbsp;
+&nbsp;
+
+##### 1.4. The map shows ethnicities as a proportion of the total population in each police force area.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=4}
+  
+
+# Merging the data based on Local_Authority and Geography columns
+eth_police_datas <- eth_data %>%
+  left_join(police_local_juris, by = c("Geography" = "Local_Authority"))
+eth_police_data <- eth_police_datas[,c(1,2,3,4,10)]
+#Areas left out: Finding Missing Values
+na_indices <- which(is.na(eth_police_data$Police_Force))
+geography_names_na <- eth_police_data$Geography[na_indices]
+
+
+eth_police_data <- eth_police_data %>%
+  mutate(
+    Police_Force = case_when(
+      Geography == "West Northamptonshire" ~ "Northamptonshire",
+      Geography == "Buckinghamshire" ~ "Thames Valley",
+      Geography == "Dorset" ~ "Dorset",
+      Geography == "Bournemouth, Christchurch and Poole" ~ "Dorset",
+      Geography == "North Northamptonshire" ~ "Northamptonshire",
+      Geography %in% c("West Suffolk", "East Suffolk") ~ "Suffolk",
+      Geography == "Somerset West and Taunton" ~ "Avon and Somerset",
+      TRUE ~ Police_Force  
+    )
+  )
+#Ethnicity data based on police territorial area
+eth_police_areas <- eth_police_data %>%
+  group_by(Police_Force, Ethnicity) %>%
+  summarize(
+    Ethnic_Population = sum(`Ethnic Population`),
+    Local_Authority_Population = sum(`Local Authority Population`),
+    .groups = "drop"
+  )
+eth_police_areas$Ethnicity_Percentage = round((eth_police_areas$Ethnic_Population/ eth_police_areas$Local_Authority_Population) * 100, 2)
+
+
+map_pol_data <- merge(uk_police_geojson, eth_police_areas, by.x = "PFA22NM", by.y = "Police_Force")
+# Converting to sf object
+loc_pol_sf <- st_as_sf(map_pol_data)
+loc_pol_sf <- st_transform(loc_pol_sf, 4326)
+# Convert to data.table for faster processing
+setDT(loc_pol_sf)
+loc_pol_eth_pop <- loc_pol_sf[, .(Eth_Count = paste(Ethnicity, "-", Ethnicity_Percentage,"%", collapse = "<br>")), by = .(PFA22NM, LONG, LAT)]
+loc_pol_eth_map <- leaflet(data = loc_pol_eth_pop) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(lng = mean(loc_pol_eth_pop$LONG, na.rm = TRUE), 
+          lat = mean(loc_pol_eth_pop$LAT, na.rm = TRUE), 
+          zoom = 5) %>%
+  addCircleMarkers(
+    lng = ~LONG,
+    lat = ~LAT,
+    color = "purple",
+    radius = 5,
+    stroke = FALSE,
+    fillOpacity = 0.7,
+    popup = ~paste("<b>Policing Area:</b>", PFA22NM, "<br>",
+                   "<b>Ethnicity in Local Population:</b><br>", Eth_Count)
+  )%>%
+  addControl(
+    html = "<h3 style='font-weight: bold; text-align: center; font-size: 14px; background-color: transparent;''>Ethnicities as proportion of total population in each police jurisdiction in England and Wales </h3>",
+    position = "topleft"
+  )%>%
+  addControl(
+    html ='<div style="font-size: 8px">Source:Census(2021) and ONS Open Geography Portal, Office for National Statistics UK</div>',
+    position = "bottomleft"
+  )
+loc_pol_eth_map
+```
+&nbsp;
+&nbsp;
+
+### __**2. Findings**__
+&nbsp;
+
+#### __2.1. Correlating police deployment with non-white populations__
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=10, fig.height=5}
+#NON ETHNIC POPULATION- POLICE OFFICERS
+
+police_areas_eth <- read_csv("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/by-ethnicity-and-area-police-officers-table.csv")
+#Data Cleaning
+#Removing BTP
+police_areas_eth <- police_areas_eth[-5, ]
+#Adding ethnicity to column names
+police_areas_eth[1, 5:7] <- lapply(police_areas_eth[1, 5:7], function(x) paste("Asian",x, sep = "_"))
+police_areas_eth[1, 8:10] <- lapply(police_areas_eth[1, 8:10], function(x) paste("Black",x, sep = "_"))
+police_areas_eth[1, 11:13] <- lapply(police_areas_eth[1, 11:13], function(x) paste("Mixed",x, sep = "_"))
+police_areas_eth[1, 14:16] <- lapply(police_areas_eth[1, 14:16], function(x) paste("White",x, sep = "_"))
+police_areas_eth[1, 17:19] <- lapply(police_areas_eth[1, 17:19], function(x) paste("Other",x, sep = "_"))
+police_areas_eth[1, 20:22] <- lapply(police_areas_eth[1, 20:22], function(x) paste("Unknown",x, sep = "_"))
+# Changing col names
+police_areas_eth[1, ] <- lapply(police_areas_eth[1, ], function(x) gsub("% of", "", x))
+colnames(police_areas_eth) <- as.character(unlist(police_areas_eth[1, ]))
+police_areas_eth <- police_areas_eth[-1, ]
+police_areas_eth <- police_areas_eth %>%
+  mutate(Geography = ifelse(Geography == "Devon and Cornwall", "Devon & Cornwall", Geography))
+#Obtaining Population of Local Authority
+result <- left_join(
+  police_areas_eth,
+  eth_police_areas %>% select(Police_Force, Local_Authority_Population),
+  by = c("Geography" = "Police_Force")
+)
+police_ethnic_juris<- unique(result)
+# Columns to convert to numeric and remove commas
+cols_to_convert <- names(police_ethnic_juris)[2:ncol(police_ethnic_juris)]
+for (col in cols_to_convert) {
+  police_ethnic_juris[[col]] <- as.numeric(gsub(",", "", as.character(police_ethnic_juris[[col]])))
+}
+#Calculating Police-Population Ratio
+police_ethnic_juris$prop_police <- round((police_ethnic_juris$`Number of police officers (FTE)` / police_ethnic_juris$Local_Authority_Population) * 100, 2)
+#Calculating non-white ethnic population
+police_ethnic_juris$non_white_ethnicity_percent <- rowSums(
+  police_ethnic_juris[, c("Asian_ population", "Black_ population", "Mixed_ population", "Other_ population")],
+  na.rm = TRUE
+)
+police_ethnic_juris$non_white_ethnicity_population <- police_ethnic_juris$non_white_ethnicity_percent * police_ethnic_juris$Local_Authority_Population
+#Removing Total statistics for England+Wales
+police_ethnic_juris <- police_ethnic_juris[-1, ]
+
+#Calculating Correlation: Non-White Ethnic Population and Police Officers
+correlation <- cor(police_ethnic_juris$non_white_ethnicity_population, police_ethnic_juris$`Number of police officers (FTE)`)
+cor_text <- paste("Correlation:", round(correlation, 2))
+#Plotting
+corr_police_eth <- ggplot(police_ethnic_juris, aes(x = non_white_ethnicity_population / 1e+09, y = `Number of police officers (FTE)`)) +
+  geom_point() +
+  labs(x = "\n Non-White Ethnic Population (in billion)", y = "Number of Police Officers \n", caption="Source: Police Wokforce,England and Wales(2021)- Home Office UK \n Census(2021)-Office for National Statistics UK") +
+  ggtitle("Correlation between Police Deployment and Non-White Ethnic Population \n") +
+  geom_label(aes(label = cor_text), x = Inf, y = Inf, hjust = 3, vjust = 5, size = 4, color = "red", show.legend = FALSE)+
+  theme(plot.title = element_text(hjust = 0.5, size=14),
+    plot.caption = element_text(size = 6))
+corr_police_eth
+```
+&nbsp;
+
+##### A correlation of __0.99__ signals robust connection between larger non-ethnic populations and heightened officer deployment, suggesting that areas with larger non-ethnic populations might experience more police involvement.
+&nbsp;
+&nbsp;
+
+#### __2.2. Police Force Analysis__
+&nbsp;
+
+##### A diverse police force is crucial for building trust, community relations, and operational effectiveness. Reflecting community diversity fosters understanding, fair treatment, and effective crime resolution while reducing biases and improving communication for equitable policing.
+&nbsp;
+
+##### __2.2.1. Police Force Diversity__
+&nbsp;
+
+##### The visual below depicts ethnic diversity among officers relative to the total workforce in each police force:
+
+```{r, message= FALSE, warning=FALSE,fig.width=10, fig.height=10}
+# POLICE ETHNICITY PLOT
+
+police_columns <- c("Asian_ police officers", 
+                    "Black_ police officers", 
+                    "Mixed_ police officers", 
+                    "White_ police officers",
+                    "Other_ police officers")
+
+data_plot_police <- police_ethnic_juris %>%
+  select(Geography, all_of(police_columns))
+
+data_melted_police <- data_plot_police %>%
+  pivot_longer(cols = -Geography, names_to = "Ethnicity", values_to = "Count")
+
+police_ethnicity_plot <- ggplot(data_melted_police, aes(x = "", y = Count, fill = Ethnicity)) +
+  geom_bar(stat = "identity", width = 1) +
+  facet_wrap(~Geography, nrow = 7)+
+  coord_polar("y", start = 0) +
+  labs(x = NULL, y = NULL,caption="Source: Police Wokforce,England and Wales(2021)- Home Office UK and Office for National Statistics UK") +
+  ggtitle("Ethnic Composition of Police Officers Across Police Force Areas \n") +
+  scale_fill_discrete(labels = c("Asian_ police officers" = "Asian", "Black_ police officers" = "Black", "Mixed_ police officers" = "Mixed","White_ police officers" = "White","Other_ police officers" = "Other" )) +
+  theme_void() +
+  theme(legend.position = "right",
+        legend.key.size = unit(0.2, "cm"),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 8),
+        legend.box.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+        plot.margin = margin(2, 2, 2, 2, "cm"),
+        strip.text = element_text(size = 7, hjust = 0.5),
+        plot.title = element_text(hjust = 0.5, size=14),
+        plot.caption = element_text(size = 6),
+        legend.box.background = element_rect(color = "black", linetype = "solid", size = 1))
+police_ethnicity_plot
+```
+&nbsp;
+
+##### __2.2.2. Police Force Representation: National Level__
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=5}
+
+total_eth_ew <- eth_datas %>% 
+  filter(Geography == "All - England And Wales") %>% 
+  filter(Ethnicity=="Asian"|Ethnicity=="Black"|Ethnicity=="Mixed"|Ethnicity=="White"|Ethnicity=="Other")
+
+total_eth_ew <- total_eth_ew[, c(4, 6, 8, 9)]
+
+fte_columns <- grep("(FTE)", names(police_ethnic_juris), value = TRUE)
+
+sum_of_fte <- lapply(fte_columns, function(col_name) {
+  sum_value <- sum(police_ethnic_juris[[col_name]], na.rm = TRUE)
+  return(data.frame(Officer_Ethnicity = col_name, Total_Officers = sum_value))
+})
+
+sum_of_fte_df <- do.call(rbind, sum_of_fte)
+total_officers_byeth <- sum_of_fte_df[-1,]
+total_officers_byeth$Officer_Ethnicity <- str_replace(total_officers_byeth$Officer_Ethnicity, "_.*", "")
+
+ew_eth_officers<-  merge(total_eth_ew, total_officers_byeth, by.x = "Ethnicity", by.y = "Officer_Ethnicity", all = TRUE)
+
+ew_eth_officers <- ew_eth_officers %>% 
+  filter(Ethnicity!= "Unknown")
+
+ew_eth_officers$Repres <- (ew_eth_officers$Total_Officers/ew_eth_officers$`Ethnic Population`)*1000
+
+ggplot(ew_eth_officers, aes(x = Ethnicity, y = Repres)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(Repres, 2)), vjust = -0.5, size = 3) + # Displaying value labels
+  labs(
+    x = "\n Ethnicity",
+    y = "Representation (per 1000 individuals) \n",
+    title = "Police Representation by Ethnicity \n",
+    caption="Source: Police Wokforce,England and Wales(2021)- Home Office UK \n Census(2021)-Office for National Statistics UK"
+  ) +
+  theme_minimal()+
+  theme(plot.title = element_text(hjust = 0.5, size=14),
+    plot.caption = element_text(size = 6))
+```
+&nbsp;
+
+##### The resulting ratios portrayed the proportional presence of different ethnicities within law enforcement relative to their respective population sizes.A ratio of 2.57 White officers per 1000 White individuals suggests higher representation, while lower ratios for Black and Other officers hint at potential underrepresentation.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE}
+##STOP AND SEARCH DATA
+
+#Unzipping the zipped folder to extract data
+folder_path <- "C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/a5b42e3ac24aa7ae5e0f355749cf7f837162c43a.zip"
+unzip("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/a5b42e3ac24aa7ae5e0f355749cf7f837162c43a.zip", exdir = "unzipped_folder")
+unzip_file_list <- list.files(path = "unzipped_folder", pattern = "\\-stop-and-search.csv$", recursive = TRUE, full.names = TRUE)
+
+#Creating a single table with column shpwing area of incidences
+ssd <- unzip_file_list %>%
+  map_df(~ {
+    area_name <- str_extract(.x, "(?<=unzipped_folder/\\d{4}-\\d{2}/\\d{4}-\\d{2}-)\\w+(-\\w+)*(?=-stop-and-search.csv)")  # Extract area name
+    read_csv(.x) %>%
+      mutate(area = area_name)
+  })
+
+#Data Cleaning
+ssd$area <- gsub("-", " ", ssd$area)
+ssd <- ssd %>% filter(area != "btp")
+ssd <- ssd %>% arrange(area)
+ssd$ExtractedEthnicity <- ifelse(
+  is.na(ssd$`Self-defined ethnicity`),
+  NA,
+  str_extract(ssd$`Self-defined ethnicity`, "(.*?)(?= -|$)")
+)
+
+names(ssd)[8]<- "Age"
+names(ssd)[9]<- "Suspect_Ethnicity"
+names(ssd)[10]<- "Officer_Ethnicity"
+names(ssd)[12]<- "Search_Object"
+names(ssd)[14]<- "Outcome_Search_Object"
+names(ssd)[15]<- "Additional_Search"
+names(ssd)[17] <- "Suspect_Major_Ethnicity"
+ssd <- ssd %>%
+  mutate(Suspect_Major_Ethnicity = case_when(
+    Suspect_Major_Ethnicity == "White" ~ "White",
+    Suspect_Major_Ethnicity == "Asian/Asian British" ~ "Asian",
+    Suspect_Major_Ethnicity == "Black/African/Caribbean/Black British" ~ "Black",
+    Suspect_Major_Ethnicity == "Mixed/Multiple ethnic groups" ~ "Mixed",
+    Suspect_Major_Ethnicity == "Other ethnic group" ~ "Other",
+    is.na(Suspect_Major_Ethnicity) ~ "NA", 
+    TRUE ~ as.character(Suspect_Major_Ethnicity)
+  ))
+stop_search <- dbConnect(SQLite(), "stop_search.db")
+dbWriteTable(stop_search, "ssd", ssd, overwrite = TRUE)
+```
+&nbsp;
+
+#### __2.3. Stop-Search Analysis__
+&nbsp;
+
+##### __2.3.1. General Overview__
+&nbsp;
+
+##### The map displays the percentage of individuals from each ethnicity stopped relative to their respective local populations in each police force area.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=4}
+#Area and Incidences per Ethnicity
+
+area_eth_query <- "SELECT Suspect_Major_Ethnicity, area, Count(*)
+FROM ssd
+WHERE 
+  Suspect_Major_Ethnicity != 'NA'
+GROUP BY Suspect_Major_Ethnicity, area
+ORDER BY area"
+area_eth <- dbGetQuery(stop_search, area_eth_query)
+
+#Data Cleaning
+area_eth$area <- tolower(area_eth$area)
+uk_police_geojson$PFA22NM <- tolower(uk_police_geojson$PFA22NM)
+uk_police_geojson <- uk_police_geojson %>%
+  mutate(PFA22NM = recode(PFA22NM,
+                          "metropolitan police" = "metropolitan",
+                          "devon & cornwall" = "devon and cornwall",
+                          "dyfed and powys" = "dyfed powys",
+                          "london, city of" = "city of london"))
+
+#Getting Local Authority pop for each ethinicty per police area
+
+police_area_eth_pop <- eth_police_areas %>%
+  filter(Ethnicity=="Asian"|Ethnicity=="Black"|Ethnicity=="Mixed"|Ethnicity=="White"|Ethnicity=="Other")
+police_area_eth_pop$Police_Force <- tolower(police_area_eth_pop$Police_Force)
+police_area_eth_pop <- police_area_eth_pop %>%
+  mutate(Police_Force = recode(Police_Force,
+                          "metropolitan police" = "metropolitan",
+                          "devon & cornwall" = "devon and cornwall",
+                          "dyfed-powys" = "dyfed powys",
+                          "london, city of" = "city of london"))
+
+map_area_eth_data <- merge(uk_police_geojson, area_eth, by.x = "PFA22NM", by.y = "area")
+map_area_eth_data <- merge(police_area_eth_pop, map_area_eth_data,
+                     by.x = c("Police_Force", "Ethnicity"),
+                     by.y = c("PFA22NM", "Suspect_Major_Ethnicity"),
+                     all = TRUE)
+map_area_eth_data <- map_area_eth_data[!is.na(map_area_eth_data$LONG) & !is.na(map_area_eth_data$LAT), ]
+sf_map_area_eth_data <- st_as_sf(map_area_eth_data, coords = c("LONG", "LAT"), crs = 4326)
+
+# Converting to sf object
+sf_area_eth <- st_as_sf(map_area_eth_data)
+sf_area_eth <- st_transform(sf_area_eth, 4326)
+# Convert to data.table for faster processing
+setDT(sf_area_eth)
+total_cases_area_eth <- sf_area_eth %>%
+  group_by(Police_Force) %>%
+  summarise(total_cases = sum(`Count(*)`))
+
+sf_area_eth <- sf_area_eth %>%
+  mutate(Percentage = (`Count(*)` / Ethnic_Population) * 100)
+
+area_eth_pop <- sf_area_eth[, .(Ethnicity = paste(Ethnicity, "-", round(Percentage,2)," %", collapse = "<br>")), by = .(Police_Force, LONG, LAT)]
+area_eth_pop_map <- leaflet(data = area_eth_pop) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(lng = mean(sf_area_eth$LONG, na.rm = TRUE), 
+          lat = mean(sf_area_eth$LAT, na.rm = TRUE), 
+          zoom = 5) %>%
+  addCircleMarkers(
+    lng = ~LONG,
+    lat = ~LAT,
+    color = "purple",
+    radius = 5,
+    stroke = FALSE,
+    fillOpacity = 0.7,
+    popup = ~paste("<b>Policing Area:</b>", toupper(Police_Force), "<br>",
+                   "<b>Cases per Ethnicity:</b><br>", Ethnicity)
+  )%>%
+  addControl(
+    html = "<h3 style='font-weight: bold, text-align: center; font-size: 14px; background-color: transparent;''> Stop and Search Incidents Relative to Ethnic Population Sizes in England and Wales </h3>",
+    position = "topleft"
+  )%>%
+  addControl(
+    html ='<div style="font-size: 8px">Source: Stop and Search Data collection(2021), Home OfficeUK</div>',
+    position = "bottomleft"
+  )
+area_eth_pop_map
+```
+&nbsp;
+
+
+##### The following illustrations delineate the total 2021 cases for various ethnicities and the gender distribution within each ethnicity:
+&nbsp;
+
+
+```{r, message= FALSE, warning=FALSE, ,fig.width=8, fig.height=4}
+# Total Suspects: ETHNICITY
+
+count_suspect <- "
+SELECT Suspect_Major_Ethnicity, COUNT(*) as Count,
+       COUNT(*) * 100 / (
+            SELECT COUNT(*)
+            FROM ssd
+            WHERE Suspect_Major_Ethnicity != 'NA'
+        ) AS Percentage
+FROM ssd
+WHERE Suspect_Major_Ethnicity != 'NA'
+GROUP BY Suspect_Major_Ethnicity"
+
+tot_sus <-dbGetQuery(stop_search, count_suspect)
+tot_sus_pie <- ggplot(tot_sus, aes(x = "", y = Percentage, fill = Suspect_Major_Ethnicity)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0) +
+  labs(title = "General Overview:Ethnicity Distribution (Absolute) in Stop and Search Incidents",
+       caption = "Source: Stop and Search Data Collection (2021)-Home Office UK",
+       fill = "Suspect Major Ethnicity") +
+  scale_fill_discrete(name = "Suspect Major Ethnicity") +
+  geom_text(aes(label = paste0(Percentage, "%")), position = position_stack(vjust = 0.5))+
+  theme_void()+
+  scale_fill_brewer(palette = "Set1")+
+  theme(legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+        plot.title = element_text(size=12),
+        plot.caption = element_text(size = 6))
+tot_sus_pie
+
+```
+&nbsp;
+
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=4}
+#GENDER PROFILE
+gender_query <- "
+SELECT 
+  Suspect_Major_Ethnicity,
+  Gender,
+  COUNT(*) as Count,
+  COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY Suspect_Major_Ethnicity) as Percentage
+FROM ssd
+WHERE 
+  Suspect_Major_Ethnicity != 'NA'
+  AND Gender != 'NA'
+GROUP BY Suspect_Major_Ethnicity, Gender
+ORDER BY Suspect_Major_Ethnicity, Gender"
+
+gender_eth <- dbGetQuery(stop_search, gender_query)
+ggplot(gender_eth, aes(x = "", y = Percentage, fill = Gender)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  geom_text(aes(label = paste0(Gender,": ", round(Percentage, 2), "%"), 
+                x = ifelse(Gender == "Other", 1.5, ifelse(Gender == "Female", 1, 0.5))), 
+            position = position_stack(vjust = 0.5), 
+            size = 3, color = "black") +
+  coord_polar("y", start = 0) +
+  facet_wrap(~Suspect_Major_Ethnicity) +
+  labs(title = "General Overview: Gender Distribution Within Ethnic Groups in Stop and Search Incidents \n",
+       caption = "Source: Stop and Search Data Collection (2021)-Home Office UK",
+       fill = "Gender",
+       y = "Percentage") +
+  theme_void() +
+  theme(legend.position = "right",
+        legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+        plot.title = element_text(size=12),
+        plot.caption = element_text(size = 6))+
+  scale_fill_brewer(palette = "Accent")
+
+
+```
+&nbsp;
+&nbsp;
+
+##### __2.3.2. Analysing Ethnic Diversity and its Impact on Stops__
+&nbsp;
+
+##### __2.3.2.1. Incidences per Ethnicity__
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=6}
+
+suspect_by_eth <- merge(total_eth_ew, tot_sus, by.x = "Ethnicity", by.y = "Suspect_Major_Ethnicity")
+suspect_by_eth$Represent <- (suspect_by_eth$Count/suspect_by_eth$`Ethnic Population`)*1000
+ggplot(suspect_by_eth, aes(x = Ethnicity, y = Represent, fill = Ethnicity)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  geom_text(aes(label = paste0(round(Represent, 2))), 
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3)+
+  labs(
+    x = "\n Ethnicity",
+    y = "Stop and Search Rates (per 1000 individuals) \n ",
+    title = "Stop and Search Rates per 1,000 Population of Each Respective Ethnicity \n",
+    caption= "Source: Stop and Search Data Collection (2021)-Home Office UK \n Census(2021)- Office for National Statistics UK"
+  ) +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(hjust = 0.5),
+    legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+    legend.title = element_text(size = 14),
+    axis.title.x = element_text(size = 11),
+    axis.title.y = element_text(size = 11),
+    plot.title = element_text(size=14),
+    plot.caption = element_text(size = 6)
+  )
+```
+&nbsp;
+
+##### The data suggests a higher likelihood of individuals belonging to Black and Other ethnicities being subjected to Stop and Search incidents compared to those from the White, Mixed, and Asian ethnicities.
+&nbsp;
+
+##### __2.3.2.2. Ethnicity Proportion in Suspects Stopped by Officers__
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE, ,fig.width=8, fig.height=4}
+#Ethnicity of Officer Vs Ethnicity of Suspect
+
+query_eth <- "
+WITH EthnicityCounts AS (
+  SELECT Officer_Ethnicity, SUM(Count) AS TotalCount
+  FROM (
+    SELECT Officer_Ethnicity, COUNT(*) AS Count
+    FROM ssd
+    WHERE Officer_Ethnicity IS NOT NULL 
+      AND Suspect_Major_Ethnicity IS NOT NULL 
+      AND Suspect_Major_Ethnicity != 'NA'
+    GROUP BY Officer_Ethnicity, Suspect_Major_Ethnicity
+  ) AS SubCounts
+  GROUP BY Officer_Ethnicity
+)
+
+SELECT s.Officer_Ethnicity, s.Suspect_Major_Ethnicity, 
+       s.Count * 1.0 / t.TotalCount AS Proportion
+FROM (
+  SELECT Officer_Ethnicity, Suspect_Major_Ethnicity, COUNT(*) AS Count
+  FROM ssd
+  WHERE Officer_Ethnicity IS NOT NULL 
+    AND Suspect_Major_Ethnicity IS NOT NULL 
+    AND Suspect_Major_Ethnicity != 'NA'
+  GROUP BY Officer_Ethnicity, Suspect_Major_Ethnicity
+) AS s
+JOIN EthnicityCounts t ON s.Officer_Ethnicity = t.Officer_Ethnicity
+"
+
+sus_off_eth <- dbGetQuery(stop_search, query_eth)
+
+sus_off_eth_map <- ggplot(sus_off_eth, aes(x = Officer_Ethnicity, y = Proportion, fill = Suspect_Major_Ethnicity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Ethnic Breakdown: Proportion of Suspects Stopped by Officers of Varied Ethnicities \n",
+       x = "\n Officer Ethnicity",
+       y = "Proportion \n",
+       caption= "Source: Stop and Search Data Collection (2021)-Home Office UK") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 0.5),
+    legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+    legend.title = element_text(size = 14),
+    axis.title.x = element_text(size = 11),
+    axis.title.y = element_text(size = 11),
+    plot.title = element_text(size=14),
+    plot.caption = element_text(size = 6)
+  ) +
+  scale_fill_brewer(palette = "Set1", name = "Suspects Ethnicity")
+sus_off_eth_map
+
+```
+&nbsp;
+
+##### Officers typically stop suspects from their own ethnicity, but 'Mixed' officers notably stopped many from ‘Other’ ethnicity too.It could stem from officers feeling comfortable interacting with similar ethnicities. It might improve interactions but raises concerns about biases and unequal dynamics during stop and search. There might also be a tendency for officers to engage more with their own ethnicity to avoid perceived racial profiling.
+&nbsp;
+
+##### __2.3.3. Investigating Biases in Associating Searched Objects with Suspect Ethnicity__
+&nbsp;
+
+##### It examines if specific ethnicities are disproportionately linked to items such as controlled drugs, offensive weapons, psychoactive substances, and wildlife offences, chosen for their law enforcement relevance.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=10, fig.height=7}
+# Object-Ethnicity Association
+obj_eth <- "SELECT 
+    t.Search_Object,
+    t.Suspect_Major_Ethnicity,
+    t.Count,
+    t.Count * 100 / total.TotalCount AS Proportion
+FROM (
+    SELECT 
+        Search_Object,
+        Suspect_Major_Ethnicity,
+        COUNT(*) AS Count
+    FROM ssd 
+    WHERE Search_Object IN ('Controlled drugs', 'Offensive weapons', 'Psychoactive substances', 'Evidence of wildlife offences')
+      AND Suspect_Major_Ethnicity != 'NA'
+    GROUP BY Search_Object, Suspect_Major_Ethnicity
+) AS t
+JOIN (
+    SELECT 
+        Search_Object,
+        COUNT(*) AS TotalCount
+    FROM ssd 
+    WHERE Search_Object IN ('Controlled drugs', 'Offensive weapons', 'Psychoactive substances', 'Evidence of wildlife offences')
+      AND Suspect_Major_Ethnicity != 'NA'
+    GROUP BY Search_Object
+) AS total ON t.Search_Object = total.Search_Object"
+
+obj_eth_table <- dbGetQuery(stop_search, obj_eth)
+
+object_eth <- merge(obj_eth_table,total_eth_ew, by.x="Suspect_Major_Ethnicity", by.y ="Ethnicity")
+object_eth$Represent <- (object_eth$Count/object_eth$`Ethnic Population`)*1000
+
+ggplot(object_eth, aes(x = Suspect_Major_Ethnicity, y = Represent, fill = Search_Object)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Search_Object, scales = "free", labeller = labeller(Search_Object = c(
+    "Controlled drugs" = "Controlled Drugs",
+    "Evidence of wildlife offences" = "Wildlife Offences",
+    "Offensive weapons" = "Offensive Weapons",
+    "Psychoactive substances"= "Psychoactive Substances"
+  ))) +
+  labs(
+    x = "\n Suspect's Ethnicity",
+    y = "Cases (per 1000 individuals) \n",
+    title = "Representation of Ethnicities in Stop and Search Incidents per 1000 Population by Search Object Category \n",
+    caption= "Source: Stop and Search Data Collection (2021)-Home Office UK \n Census(2021)- Office for National Statistics UK",
+    fill = "Search Object"
+  ) +
+  theme(axis.text.x = element_text(hjust = 0.5),
+    legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+    legend.title = element_text(size = 14),
+    axis.title.x = element_text(size = 11),
+    axis.title.y = element_text(size = 11),
+    plot.title = element_text(size=12),
+    plot.caption = element_text(size = 6)
+  )
+
+```
+&nbsp;
+
+
+##### The 'Other' ethnic group demonstrates higher representation across all search objects, while White individuals exhibit lower representation in most search categories. Both 'Other' and 'Black' ethnicities notably overrepresent in certain search categories, indicating potential biases in ethnicity-targeted searches during stop and search incidents.
+&nbsp;
+
+##### __2.3.4. Assessing Disparities in Post-Stop-and-Search Treatments__
+&nbsp;
+
+##### Grouping outcomes into categories like "No action," "Arrest," and "Warning" captures diverse responses post-stop and search. This enables examination of how different ethnic groups are treated following these encounters for potential disparities.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=10, fig.height=7}
+#OUTCOME-ETHNICITY 
+outcome_query <- "
+SELECT 
+  Suspect_Major_Ethnicity,
+  SUM(CASE WHEN Outcome = 'A no further action disposal' THEN 1 ELSE 0 END) AS No_Action_Count,
+  SUM(CASE WHEN Outcome = 'Arrest' THEN 1 ELSE 0 END) AS Arrest_Count,
+  SUM(CASE WHEN Outcome NOT IN ('A no further action disposal', 'Arrest') THEN 1 ELSE 0 END) AS Warnings_Count,
+  ROUND(SUM(CASE WHEN Outcome = 'A no further action disposal' THEN 1 ELSE 0 END) * 100.0 / total.No_Action_Total, 2) AS No_Action_Percentage,
+  ROUND(SUM(CASE WHEN Outcome = 'Arrest' THEN 1 ELSE 0 END) * 100.0 / total.Arrest_Total, 2) AS Arrest_Percentage,
+  ROUND(SUM(CASE WHEN Outcome NOT IN ('A no further action disposal', 'Arrest') THEN 1 ELSE 0 END) * 100.0 / total.Warnings_Total, 2) AS Warnings_Percentage
+FROM ssd
+CROSS JOIN (
+  SELECT 
+    SUM(CASE WHEN Outcome = 'A no further action disposal' THEN 1 ELSE 0 END) AS No_Action_Total,
+    SUM(CASE WHEN Outcome = 'Arrest' THEN 1 ELSE 0 END) AS Arrest_Total,
+    SUM(CASE WHEN Outcome NOT IN ('A no further action disposal', 'Arrest') THEN 1 ELSE 0 END) AS Warnings_Total
+  FROM ssd
+  WHERE 
+    Outcome IS NOT NULL 
+    AND Outcome != 'NA'
+    AND Suspect_Major_Ethnicity IS NOT NULL
+    AND Suspect_Major_Ethnicity != 'NA'
+) AS total
+WHERE 
+  Outcome IS NOT NULL 
+  AND Outcome != 'NA'
+  AND Suspect_Major_Ethnicity IS NOT NULL
+  AND Suspect_Major_Ethnicity != 'NA'
+GROUP BY Suspect_Major_Ethnicity"
+
+outh_eth_table <- dbGetQuery(stop_search, outcome_query)
+#Tidy Format
+percentages_data <- outh_eth_table %>%
+  select(Suspect_Major_Ethnicity, matches("Count"))
+outp_eth_final <- percentages_data %>%
+  pivot_longer(cols = -Suspect_Major_Ethnicity, names_to = "Percentage_Type", values_to = "Count_Value")
+output_ethnicity <- merge(outp_eth_final,total_eth_ew,by.x="Suspect_Major_Ethnicity", by.y="Ethnicity")
+output_ethnicity$Represent <- (output_ethnicity$Count_Value/output_ethnicity$`Ethnic Population`)*1000
+
+ggplot(output_ethnicity, aes(x = Suspect_Major_Ethnicity, y = Represent)) +
+  geom_bar(stat = "identity", position = "dodge", aes(fill = Suspect_Major_Ethnicity)) +
+  geom_text(aes(label = round(Represent, 2)), position = position_dodge(width = 0.9), vjust = -0.5) +
+  facet_wrap(~ Percentage_Type, labeller = labeller(Percentage_Type = c(
+    "Arrest_Count" = "Arrest",
+    "No_Action_Count" = "No Action",
+    "Warnings_Count" = "Warning"
+  ))) +
+  labs(
+    x = "\n Suspect Ethnicity",
+    y = "Representation (per 1000 individuals) \n",
+    title = "Results of Stop-Search Outcomes per 1000 Individuals Across Ethnicities \n",
+    fill = "Suspect Ethnicity",
+    caption= "Source: Stop and Search Data Collection (2021)-Home Office UK \n Census(2021)- Office for National Statistics UK"
+  ) +
+  theme(axis.text.x = element_text(hjust = 0.5),
+    legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+    legend.title = element_text(size = 14),
+    axis.title.x = element_text(size = 11),
+    axis.title.y = element_text(size = 11),
+    plot.title = element_text(hjust = 0.5, size=14),
+    plot.caption = element_text(size = 6)
+  )
+
+```
+&nbsp;
+
+##### Higher arrest and warning counts among 'Other' and Black ethnicities post-search suggest greater police involvement, contrasting with fewer engagements for White individuals across all outcomes.This raises concerns of potential bias in post-stop decision-making, particularly for Black and 'Other' ethnicities facing disproportionately lower legal actions despite higher stop rates, hinting at disparities in law enforcement.
+&nbsp;
+
+#### __2.4. Confidence in Local Police__
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=8, fig.height=5}
+# CONFIDENCE IN POLICE DATA
+conf_data <- read_csv("C:/Users/sneha/OneDrive/Desktop/Data for Data Scientist/Assessment/Final/data/by-ethnicity-over-time-table.csv")
+
+#DATA CLEANING
+# Combine the first row elements with existing column names
+new_col_names <- paste(conf_data[1,], names(conf_data))
+# Assign the new column names to the dataframe
+names(conf_data) <- new_col_names
+conf_data <- conf_data[-1, ]
+clean_col_names <- gsub("\\.{3}[0-9]+", "", colnames(conf_data))
+colnames(conf_data) <- clean_col_names
+# Identify columns with "%" and get years
+percent_cols <- grep("%", names(conf_data))
+years <- gsub(".*% (\\d{4}/\\d{2})", "\\1", names(conf_data)[percent_cols])
+# Update column names with years
+sample_size_cols <- grep("Sample size", names(conf_data))
+for (i in 1:length(sample_size_cols)) {
+  col_index <- sample_size_cols[i]
+  year <- years[i]
+  colnames(conf_data)[col_index] <- paste("Sample size", year)
+}
+# Replace spaces with underscores in column names
+colnames(conf_data) <- gsub(" ", "_", colnames(conf_data))
+# Creating overall_etnicity column for categorisation: Major Ethnicities
+conf_data <- conf_data %>%
+  mutate(
+    overall_ethnicity = case_when(
+      Ethnicity_ == "All" ~ "All",
+      between(row_number(), which(Ethnicity_ %in% c("Asian")), which(Ethnicity_ == "Asian other")) ~ "Asian",
+      between(row_number(), which(Ethnicity_ %in% c("Black")), which(Ethnicity_ == "Black other")) ~ "Black",
+      between(row_number(), which(Ethnicity_ %in% c("Mixed")), which(Ethnicity_ == "Mixed other")) ~ "Mixed",
+      between(row_number(), which(Ethnicity_ %in% c("White")), which(Ethnicity_ == "White other")) ~ "White",
+      Ethnicity_ == "Other" ~ "Other",
+      Ethnicity_ == "Arab" ~ "Arab",
+      Ethnicity_ == "Any other" ~ "Any other",
+      TRUE ~ NA_character_
+    ),
+    overall_ethnicity = ifelse(is.na(overall_ethnicity), lag(overall_ethnicity), overall_ethnicity)
+  )
+#Data Cleaning
+# Remove commas in all columns except the first and last
+cols_to_clean <- names(conf_data)[-c(1, length(conf_data))]
+conf_data[, cols_to_clean] <- lapply(conf_data[, cols_to_clean], function(x) gsub(",", "", x))
+# Replace "?" with NA in the entire dataframe
+conf_data[conf_data == "?"] <- NA
+cols_to_convert <- names(conf_data)[-c(1, ncol(conf_data))]
+# Convert selected columns to numeric
+conf_data <- conf_data %>%
+  mutate(across(all_of(cols_to_convert), as.numeric))
+
+#Data Processing
+# Select columns containing "%" and "Sample_size" in their names
+cols_to_plot <- grep("%", names(conf_data), value = TRUE)
+ethnicities_to_plot <- c("Asian", "Black", "Mixed", "White", "Other", "Arab", "Any other")
+major_eth_conf_data <- conf_data %>%
+  filter(Ethnicity_ %in% ethnicities_to_plot)
+# Melt the data for plotting
+major_eth_conf_data <- major_eth_conf_data %>%
+  select(one_of(cols_to_plot), Ethnicity_) %>%
+  pivot_longer(cols = -Ethnicity_, names_to = "Measure", values_to = "Value")
+
+# Plotting: Major Ethnicities Confidence
+conf_major_eth <- ggplot(major_eth_conf_data, aes(x = Measure, y = Value, group = Ethnicity_, color = Ethnicity_)) +
+  geom_line(size = 1) + # Adjust the line thickness here
+  geom_point() +
+  labs(title = "Police Confidence Trends Across Ethnicities \n",
+       x = "\n Time Period",
+       y = "% of People \n",
+       caption = "\n Source: Crime Survey for England and Wales(2021)",
+       color = "Ethnicities") + # Change legend title here
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size=14),
+        axis.text.x = element_text(hjust = 1),
+        plot.caption = element_text(size = 6),
+        legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+        legend.title = element_text(size = 14),
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11)) +
+  scale_x_discrete(labels = function(x) gsub("%_", "", x)) +
+  scale_color_brewer(palette = "Dark2")
+conf_major_eth
+```
+&nbsp;
+
+##### The dataset tracks confidence levels in local police among various ethnicities over years. While Asian and White communities held steady confidence , the Black community experienced a decline from 73% to 64% signalling dissatisfaction. The 'Other' group showed variability but generally decreased confidence.
+&nbsp;
+
+```{r, message= FALSE, warning=FALSE,fig.width=12, fig.height=7}
+#Data Processing for Sub ethnicities within major ethnicities
+conf_sub_eth_data <- conf_data[-1,]
+conf_sub_eth_data <- conf_sub_eth_data %>%
+  filter(Ethnicity_ != overall_ethnicity) %>% 
+  filter(Ethnicity_ != "White Gypsy/Traveller") #As % not mentioned
+
+conf_sub_eth_data <- conf_sub_eth_data %>%
+  mutate(Ethnicity_ = factor(Ethnicity_, levels = unique(conf_sub_eth_data$Ethnicity_)))
+
+conf_eth_sub_data_long <- conf_sub_eth_data %>%
+  pivot_longer(
+    cols = -c(Ethnicity_, overall_ethnicity),
+    names_to = "Measure",
+    values_to = "Value"
+  )
+conf_eth_sub_data_long <- conf_eth_sub_data_long %>%
+  filter(!grepl("Sample", Measure))
+
+conf_sub_eth_plot <- ggplot(conf_eth_sub_data_long, aes(x = Measure, y = Value, fill = overall_ethnicity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = Value), position = position_dodge(width = 0.9), vjust = -0.5,size=2) + 
+  facet_wrap(~ Ethnicity_, scales = "free", nrow = 4) +
+  labs(title = "Police Confidence Trends Across Major Sub-Ethnicities \n",
+       x = "\n Time Period",
+       y = "% of People \n",
+       caption = "\n Source: Crime Survey for England and Wales (2021)",
+       fill = "Major Ethnicities") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size=14),
+        axis.text.x = element_text(angle = 45, hjust = 1,size=4),
+        plot.caption = element_text(size=6),
+        legend.box.background = element_rect(color = "black", linetype = "solid", size = 1),
+        legend.title = element_text(size = 14),
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11)
+        ) +
+  scale_fill_brewer(palette = "Set1")+
+  scale_x_discrete(labels = function(x) gsub("%_", "", x))+
+  coord_cartesian(ylim = c(0, 100))
+
+conf_sub_eth_plot
+
+
+```
+&nbsp;
+
+##### Among major ethnic subgroups, the Chinese and 'Asian Other' have relatively higher confidence compared to other Asian ethnicities. The Black subgroup ,in general, have shown decreasing confidence with greatest variation in 'Black Other'. Similarly, White Irish demonstrate higher confidence compared to White British in White subgroup.
+&nbsp;
+&nbsp;
+
+#### __Appendix 1: Local Authorities under Police Force Area__
+```{r}
+  
+kable(police_local_juris_table, format = "html") %>%
+  kable_styling(full_width = FALSE) %>%
+  row_spec(0, bold = TRUE)  
+
+
+```
+&nbsp;
+
+#### __Appendix 2: All code in this assignment__
+&nbsp;
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE} 
+# this chunk generates the complete code appendix. 
+# eval=FALSE tells R not to run (``evaluate'') the code here (it was already run before).
+
+```
